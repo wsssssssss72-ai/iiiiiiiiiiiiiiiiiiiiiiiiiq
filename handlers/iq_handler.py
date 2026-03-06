@@ -5,6 +5,7 @@ import pytz
 import aiofiles
 import aiohttp
 from pyrogram.types import Message
+from pyrogram import filters
 
 async def fetch_post(url, json=None, headers=None):
     """Async POST request"""
@@ -40,7 +41,7 @@ async def login(app, m, all_urls, start_time, bname, batch_id, log_channel):
     video_count = len(re.findall(r'\.(m3u8|mpd|mp4)', all_text))
     pdf_count = len(re.findall(r'\.pdf', all_text))
     
-    # Count DRM videos (if any)
+    # Count DRM videos
     drm_videos = len(re.findall(r'\.(mpd|videoid)', all_text))
     
     caption = (
@@ -48,13 +49,13 @@ async def login(app, m, all_urls, start_time, bname, batch_id, log_channel):
         f"**📚 Batch Details:**\n"
         f"├ ID: `{batch_id}`\n"
         f"├ Name: {bname}\n"
-        f"└ Total Items: {len(all_urls)}\n\n"
-        f"**📊 Content Statistics:**\n"
+        f"└ Total Links: {len(all_urls)}\n\n"
+        f"**📊 Statistics:**\n"
         f"├ 🎥 Videos: {video_count}\n"
         f"├ 📄 PDFs: {pdf_count}\n"
-        f"├ 🔒 DRM Videos: {drm_videos}\n"
+        f"├ 🔒 DRM: {drm_videos}\n"
         f"└ ⏱️ Time: {int(minutes)}m {int(seconds)}s\n\n"
-        f"**⚡ Extracted by @Ayushxsdy_Bot**"
+        f"**⚡ @sdfvghhghhbnm_bot**"
     )
     
     # Write to file
@@ -67,7 +68,7 @@ async def login(app, m, all_urls, start_time, bname, batch_id, log_channel):
         caption=caption
     )
     
-    # Send to log channel (if configured)
+    # Send to log channel
     if log_channel:
         try:
             await app.send_document(
@@ -76,13 +77,33 @@ async def login(app, m, all_urls, start_time, bname, batch_id, log_channel):
                 caption=f"**New Extraction:** {bname}\n**Batch ID:** {batch_id}"
             )
         except Exception as e:
-            print(f"⚠️ Log channel error: {e}")
+            print(f"Log channel error: {e}")
     
-    # Clean up file
+    # Clean up
     try:
         os.remove(file_path)
     except:
         pass
+
+async def get_user_input(app, chat_id, timeout=300):
+    """Helper function to get user input"""
+    import asyncio
+    from pyrogram.types import Message
+    
+    future = asyncio.Future()
+    
+    @app.on_message(filters.chat(chat_id) & filters.text & ~filters.command(["start", "help", "about", "iq"]))
+    def handler(client, message):
+        if not future.done():
+            future.set_result(message)
+            handler.stop()
+    
+    try:
+        return await asyncio.wait_for(future, timeout)
+    except asyncio.TimeoutError:
+        return None
+    finally:
+        handler.stop()
 
 async def handle_iq_command(app, m: Message):
     """Main handler for /iq command"""
@@ -90,9 +111,15 @@ async def handle_iq_command(app, m: Message):
     
     status_msg = None
     try:
-        status_msg = await m.reply_text("**📱 Please send your phone number (without country code) or saved token:**")
-        input1: Message = await app.listen(chat_id=m.chat.id)
+        status_msg = await m.reply_text("**📱 Send phone number or token:**")
+        
+        # Get first input
+        input1 = await get_user_input(app, m.chat.id)
+        if not input1:
+            await status_msg.edit("**⏰ Timeout! Please try again.**")
+            return
         await input1.delete()
+        
         raw_text1 = input1.text.strip()
         logged_in = False
         token = None
@@ -100,94 +127,91 @@ async def handle_iq_command(app, m: Message):
         # Login with phone number
         if raw_text1.isdigit():
             phNum = raw_text1.strip()
-            await status_msg.edit("**📤 Sending OTP request...**")
+            await status_msg.edit("**📤 Sending OTP...**")
             
-            # Request OTP
             master0 = await fetch_post("https://www.studyiq.net/api/web/userlogin", json={"mobile": phNum})
             
             if master0.get('data'):
                 user_id = master0.get('data', {}).get('user_id')
                 if user_id:
-                    await status_msg.edit("**✅ OTP sent! Please enter the OTP:**")
+                    await status_msg.edit("**✅ OTP sent! Enter OTP:**")
                 else:
                     await status_msg.edit(f"**❌ Error:** {master0.get('msg', 'Unknown error')}")
                     return
             else:
-                await status_msg.edit(f"**❌ Error:** {master0.get('msg', 'Failed to send OTP')}")
+                await status_msg.edit(f"**❌ Error:** {master0.get('msg', 'Failed')}")
                 return
         
-            # Get OTP from user
-            input2 = await app.listen(chat_id=m.chat.id)
-            raw_text2 = input2.text.strip()
-            otp = raw_text2
+            # Get OTP
+            input2 = await get_user_input(app, m.chat.id)
+            if not input2:
+                await status_msg.edit("**⏰ Timeout! Please try again.**")
+                return
+            otp = input2.text.strip()
             await input2.delete()
             
-            # Verify OTP
-            data = {
-                "user_id": user_id,
-                "otp": otp
-            }
-
+            data = {"user_id": user_id, "otp": otp}
             await status_msg.edit("**🔄 Verifying OTP...**")
+            
             master1 = await fetch_post("https://www.studyiq.net/api/web/web_user_login", json=data)
             
             if master1.get('data'):  
                 token = master1.get('data', {}).get('api_token')
                 if token:
                     await m.reply_text(
-                        f"**✅ Login Successful!**\n\n"
-                        f"**🔑 Your Access Token (SAVE THIS):**\n"
-                        f"`{token}`\n\n"
-                        f"**💡 Next time you can just send this token directly!**"
+                        f"**✅ Login Success!**\n\n"
+                        f"**🔑 Token:** `{token}`\n\n"
+                        f"**💡 Save this token for next time!**"
                     )
                     logged_in = True
                 else:
-                    await status_msg.edit(f"**❌ Error:** {master1.get('msg', 'Login failed')}")
+                    await status_msg.edit(f"**❌ Error:** {master1.get('msg', 'Failed')}")
                     return
             else:
-                await status_msg.edit(f"**❌ Error:** {master1.get('msg', 'OTP verification failed')}")
+                await status_msg.edit(f"**❌ Error:** {master1.get('msg', 'Failed')}")
                 return
         else:
             token = raw_text1.strip()
             logged_in = True
-            await status_msg.edit("**✅ Token accepted! Fetching your courses...**")
+            await status_msg.edit("**✅ Token accepted! Fetching courses...**")
 
         if logged_in and token:
             headers = {
                 "Authorization": f"Bearer {token}",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
             
             # Get purchased courses
-            await status_msg.edit("**📚 Fetching your purchased courses...**")
             json_master2 = await fetch_get(
                 "https://backend.studyiq.net/app-content-ws/api/v1/getAllPurchasedCourses?source=WEB", 
                 headers=headers
             )
             
             if not json_master2 or not json_master2.get('data'):
-                await status_msg.edit("**❌ No purchased courses found!**")
+                await status_msg.edit("**❌ No courses found!**")
                 return
 
-            # Display available batches
+            # Show available batches
             batch_list = "**📚 Your Batches:**\n\n"
             batch_ids = []
             
-            for idx, course in enumerate(json_master2["data"], 1):
-                batch_list += f"{idx}. `{course['courseId']}` - **{course['courseTitle']}**\n"
+            for course in json_master2["data"]:
+                batch_list += f"`{course['courseId']}` - **{course['courseTitle']}**\n"
                 batch_ids.append(str(course["courseId"]))
 
             batch_ids_str = '&'.join(batch_ids)
             
             await status_msg.edit(
                 f"{batch_list}\n"
-                f"**📤 Send the Batch ID to download**\n"
-                f"**💡 For multiple batches, use & (e.g., `{batch_ids[0] if batch_ids else ''}&{batch_ids[1] if len(batch_ids)>1 else ''}`)**"
+                f"**📤 Send Batch ID to download**\n"
+                f"**💡 Multiple: `{batch_ids[0] if batch_ids else ''}&...`**"
             )
             
             # Get batch selection
-            batch_input = await app.listen(chat_id=m.chat.id)
+            batch_input = await get_user_input(app, m.chat.id)
+            if not batch_input:
+                await status_msg.edit("**⏰ Timeout! Please try again.**")
+                return
             await batch_input.delete()
             await status_msg.delete()
             
@@ -212,28 +236,27 @@ async def handle_iq_command(app, m: Message):
                     master3 = await fetch_get(course_url, headers=headers)
                     
                     if not master3 or not master3.get('data'):
-                        await progress_msg.edit(f"**❌ No data found for batch {batch_id}**")
+                        await progress_msg.edit(f"**❌ No data for batch {batch_id}**")
                         continue
                     
-                    bname = master3.get("courseTitle", "Unknown Batch").replace(' || ', '').replace('|', '')
+                    bname = master3.get("courseTitle", "Unknown")
                     all_urls = []
                     processed = 0
+                    total = len(master3['data'])
                     
-                    # Get all content IDs
-                    content_items = master3['data']
-                    
-                    for item in content_items:
+                    # Process content
+                    for item in master3['data']:
                         t_id = str(item.get("contentId"))
                         if not t_id:
                             continue
                             
-                        topicname = item.get('name', 'Unknown Topic')
-                        
-                        # Update progress every 5 items
+                        topicname = item.get('name', 'Unknown')
                         processed += 1
-                        if processed % 5 == 0:
+                        
+                        # Update progress
+                        if processed % 3 == 0:
                             try:
-                                await progress_msg.edit(f"**📥 Processing:** {topicname[:30]}... ({processed}/{len(content_items)})")
+                                await progress_msg.edit(f"**📥 Processing:** {processed}/{total} - {topicname[:30]}...")
                             except:
                                 pass
 
@@ -244,17 +267,18 @@ async def handle_iq_command(app, m: Message):
                         if not parent_data or not parent_data.get('data'):
                             continue
                             
-                        # Process each video/PDF
+                        # Process videos and notes
                         for sub_item in parent_data['data']:
-                            # Handle videos
+                            # Videos
                             url = sub_item.get('videoUrl')
                             name = sub_item.get('name', 'Untitled')
-                            
                             if url:
-                                cc = f"[{topicname}] - {name}: {url}"
-                                all_urls.append(cc)
+                                if url.endswith('.mpd'):
+                                    all_urls.append(f"[DRM][{topicname}] - {name}: {url}")
+                                else:
+                                    all_urls.append(f"[{topicname}] - {name}: {url}")
                             
-                            # Handle notes/PDFs
+                            # Notes
                             contentIdy = sub_item.get('contentId')
                             if contentIdy:
                                 try:
@@ -266,16 +290,14 @@ async def handle_iq_command(app, m: Message):
                                             if option.get('urls'):
                                                 for url_data in option['urls']:
                                                     if 'name' in url_data and 'url' in url_data:
-                                                        name = url_data['name']
-                                                        url = url_data['url']
-                                                        cc = f"[Notes] - {name}: {url}"
-                                                        all_urls.append(cc)
-                                except Exception as e:
-                                    print(f"⚠️ Error fetching lesson: {e}")
+                                                        all_urls.append(f"[Notes][{topicname}] - {url_data['name']}: {url_data['url']}")
+                                except:
+                                    pass
                     
                     if all_urls:
-                        await progress_msg.edit(f"**✅ Found {len(all_urls)} links! Sending file...**")
+                        await progress_msg.edit(f"**✅ Found {len(all_urls)} links! Sending...**")
                         await login(app, m, all_urls, start_time, bname, batch_id, CHANNEL_ID)
+                        await m.reply_text(f"**✅ Batch {batch_id} completed successfully!**")
                     else:
                         await progress_msg.edit(f"**⚠️ No URLs found for batch {batch_id}**")
                     
